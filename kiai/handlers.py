@@ -5,7 +5,7 @@ import logging
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from . import db, ordr
 from . import keyboards as kb
@@ -214,8 +214,7 @@ async def track_render(status: Message, lang: str, render_id: int):
         progress = r.get('progress') or ''
         video = r.get('videoUrl') or ''
         if video:
-            return await status.edit_text(
-                t(lang, 'done').format(url=video), reply_markup=kb.supporter_kb(lang))
+            return await deliver_video(status, lang, render_id, video)
         if 'fail' in progress.lower():
             return await status.edit_text(t(lang, 'failed').format(detail=progress))
         text = t(lang, 'progress').format(progress=progress, rid=render_id)
@@ -229,6 +228,31 @@ async def track_render(status: Message, lang: str, render_id: int):
         await status.edit_text(t(lang, 'timeout').format(rid=render_id))
     except Exception:
         pass
+
+
+async def deliver_video(status: Message, lang: str, render_id: int, video_url: str):
+    """Send the finished render as a real video in chat. o!rdr's videoUrl is a
+    watch page, so resolve the direct mp4 first (avoids the empty-video bug),
+    download it and attach it. Fall back to a plain link if it is too big."""
+    direct = await ordr.resolve_direct_video(render_id, video_url)
+    data = await ordr.download_video(direct)
+    if data:
+        try:
+            await status.answer_video(
+                video=BufferedInputFile(data, filename=f'kiai_render_{render_id}.mp4'),
+                caption=t(lang, 'done').format(url=video_url),
+                supports_streaming=True,
+                reply_markup=kb.supporter_kb(lang),
+            )
+            try:
+                await status.delete()
+            except Exception:
+                pass
+            return
+        except Exception:
+            log.exception('video send failed, falling back to link')
+    await status.edit_text(t(lang, 'done').format(url=video_url),
+                           reply_markup=kb.supporter_kb(lang))
 
 
 @router.message()

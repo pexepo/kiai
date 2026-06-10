@@ -57,3 +57,42 @@ async def get_skins(page: int = 1):
         async with sess.get(f'{ORDR_API}/skins', params={'page': page, 'pageSize': SKINS_PER_PAGE}) as r:
             data = await r.json(content_type=None) or {}
     return data.get('skins') or [], data.get('maxSkins', 0)
+
+
+# Max size Telegram accepts for a bot-uploaded video.
+MAX_VIDEO_SIZE = 49 * 1024 * 1024
+
+
+async def resolve_direct_video(render_id: int, fallback: str = '') -> str:
+    """o!rdr's videoUrl (https://link.issou.best/<code>) is a JS watch *page*,
+    NOT the mp4 itself. Downloading it and sending it as a video gives an empty
+    file ("видео пустое"). The real mp4 (cdn-video-*.issou.best) is served by the
+    dynlink endpoint keyed by renderID."""
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get('https://apis.issou.best/dynlink/ordr/gen',
+                                params={'id': render_id}) as r:
+                if r.status == 200:
+                    data = await r.json(content_type=None) or {}
+                    url = data.get('url')
+                    if url and url.endswith('.mp4'):
+                        return url
+    except Exception:
+        pass
+    return fallback
+
+
+async def download_video(url: str, limit: int = MAX_VIDEO_SIZE):
+    """Download the rendered mp4. Returns bytes, or None if it failed or is
+    bigger than what Telegram lets the bot upload (caller then sends a link)."""
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(url) as r:
+                if r.status != 200:
+                    return None
+                data = await r.read()
+        if data and len(data) <= limit:
+            return data
+    except Exception:
+        pass
+    return None
